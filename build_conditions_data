@@ -1,5 +1,6 @@
 import pandas as pd
 import streamlit as sl
+import plotly.express as px
 
 # creation of the initial dataframe to simulate values in chronic condition cc prevelances ie. avg(cc) of claims population
 data = {
@@ -7,4 +8,8 @@ data = {
     'YYYYMM': [202406, 202407, 202408, 202409, 202410, 202411, 202412]
 }
 df = pd.DataFrame(data)
-print(df)
+#print(df)
+
+# development of a line chart to see current prevelences and train a predictive model
+fig = px.line(df, x="YYYYMM", y="CC_Prevelance", title='Mock Condition Prevelance')
+fig.show()
