@@ -2,12 +2,15 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 from prophet import Prophet
+from datetime import datetime
 import altair as alt
 
 # Page title
-st.title("Chronic Disease Prevalence Public Health Data")
+st.title("Chronic Disease Prevalence Public Health Data :hospital:")
 url = "https://hrs.isr.umich.edu/data-products"
-st.write("This app provides a forecast of chronic disease prevalence in the United States using the Health and Retirement Study publically available [dataset](%s)." % url)
+on = st.toggle("More Information")
+if on:
+    st.write(f"This app provides a forecast of chronic disease prevalence in the United States using the Health and Retirement Study publicly available [dataset]({url}).")
 
 
 
@@ -25,86 +28,120 @@ df = df[
     (df['DataValueType'] == 'Crude Prevalence') &  # Filter where DataValueType is 'Crude Prevalence'
     (df['DataValue'].notna())             # Filter where DataValue is not blank
 ]
+#create columns for the layout
+column1, column2 = st.columns([0.3,0.7])
 
-# Ensure the date column is in datetime format
-df['ds'] = pd.to_datetime(df['YearStart'], format='%Y')
+with column1:
 
 # Dropdown to select the topic for forecasting
-selected_topic = st.selectbox(
-    "Select the prevalence type to forecast:",
-    options=df['Topic'].unique(),  # Use unique values from the 'Topic' column
-    index=0
-)
+    selected_topic = st.selectbox(
+        "Select the prevalence type to forecast:",
+        options=df['Topic'].unique(),  # Use unique values from the 'Topic' column
+        index=0
+    )
 
-#multiselect to select the states with default being pennsylvania, new jersey, new york, delaware, and maryland
-selected_states = st.multiselect(
-    "Select states to display:",
-    options=df['LocationDesc'].unique(),  # Use unique values from the 'LocationDesc' column
-    default=['Pennsylvania', 'New Jersey', 'New York', 'West Virginia', 'Maryland', 'Ohio']
-)
+    # Filter the DataFrame to get the questions for the selected topic
+    filtered_questions = df[df['Topic'] == selected_topic]['Question'].unique()
 
-tab1, tab2 = st.tabs(["Current Prevalence", "Predicted Prevalence"])
-with tab1:
-    
-    # Filter the data for the selected topic
+    # Dropdown to select the question for the selected topic
+    selected_question = st.selectbox(
+        "Select the specific question:",
+        options=filtered_questions,  # Use unique questions for the selected topic
+        index=0
+    )
+
+    # Multiselect to select the states with default values
+    selected_states = st.multiselect(
+        "Select states to display:",
+        options=df['LocationDesc'].unique(),  # Use unique values from the 'LocationDesc' column
+        default=['Pennsylvania', 'New Jersey', 'New York', 'West Virginia', 'Maryland', 'Ohio']
+    )
+
+    # Ensure the date column is in datetime format
+    df['ds'] = pd.to_datetime(df['YearStart'], format='%Y')
+
+    # Add a slider tool to select the year range
+    start_year = df['ds'].min().year  # Extract the earliest year
+    end_year = df['ds'].max().year    # Extract the latest year
+    year_range = st.select_slider(
+        "Select the year range:",
+        options=list(range(start_year, end_year + 1)),  # List of years
+        value=(start_year, end_year)  # Default to the full range
+    )
+
+
+
+    # Filter the data based on the selected year range
     filtered_df = df[
-        (df['Topic'] == selected_topic) &  # Filter where Topic matches the selected topic
-        (df['LocationDesc'].isin(selected_states))  # Filter where LocationDesc is in the selected states
+        (df['ds'].dt.year >= year_range[0]) &  # Filter for start year
+        (df['ds'].dt.year <= year_range[1])    # Filter for end year
     ].copy()
-    
-    
-    # divide DataValue by 100 to convert to percentage
+
+    # Further filter the data for the selected topic, question, and states
+    filtered_df = filtered_df[
+        (filtered_df['Topic'] == selected_topic) &  # Filter where Topic matches the selected topic
+        (filtered_df['Question'] == selected_question) &  # Filter where Question matches the selected question
+        (filtered_df['LocationDesc'].isin(selected_states))  # Filter where LocationDesc is in the selected states
+    ].copy()
+
+
+    # Divide DataValue by 100 to convert to percentage
     filtered_df['DataValue'] = filtered_df['DataValue'] / 100
 
-    #show top 5 states
+#show top 5 states
+with column2:
+    tab1, tab2 = st.tabs(["Current Prevalence", "Predicted Prevalence"])
+    with tab1:
+        st.write(f"Current Data for {selected_topic}")
+        # Create the chart with the selected topic as the legend
+        current_chart = alt.Chart(filtered_df).mark_line().encode(
+            x=alt.X('ds:T', title="Date"),
+            y=alt.Y('DataValue', title="Yearly Percentage", axis=alt.Axis(format='%')),
+            color=alt.Color('LocationDesc', title="State"),  # Use 'State' as the legend
+            tooltip=['ds:T', 'DataValue', 'LocationDesc']
+        ).properties(
+            title=f"{selected_topic} Prevalence By State",
+            width=700,
+            height=400
+        )
+        st.altair_chart(current_chart, use_container_width=True)
 
-    # Create the chart with the selected topic as the legend
-    current_chart = alt.Chart(filtered_df).mark_line().encode(
-        x=alt.X('ds:T', title="Date"),
-        y=alt.Y('DataValue', title="Yearly Percentage", axis=alt.Axis(format='%')),
-        color=alt.Color('LocationDesc', title="State"),  # Use 'State' as the legend
-        tooltip=['ds:T', 'DataValue', 'LocationDesc']
-    ).properties(
-        title=f"{selected_topic} Prevalence By State",
-        width=700,
-        height=400
-    )
-    st.altair_chart(current_chart, use_container_width=True)
+    with tab2:
+        st.write(f"Predicted Data for {selected_topic}")
+        
+        # Prepare data for Prophet
+        df_prophet = df[df['Topic'] == selected_topic][['ds', 'DataValue']].rename(columns={'DataValue': 'y'}).dropna()
+        
+        # Initialize and fit the Prophet model
+        model = Prophet()
+        model.fit(df_prophet)
+        
+        # Create a future dataframe for predictions
+        future = model.make_future_dataframe(periods=1, freq='Y')
+        
+        # Make predictions
+        forecast = model.predict(future)
+        
+        # Extract relevant columns
+        forecast_df = forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']]
+        
+        # Create forecast chart
+        forecast_chart = alt.Chart(forecast_df).mark_line().encode(
+            x=alt.X('ds:T', title="Date"),
+            y=alt.Y('yhat', title="Percentage", axis=alt.Axis(format='%')),
+            tooltip=['ds:T', 'yhat', 'yhat_lower', 'yhat_upper']
+        ).properties(
+            title=f"Predicted {selected_topic}",
+            width=700,
+            height=400
+        )
+        
+        # Add confidence intervals
+        forecast_chart += alt.Chart(forecast_df).mark_area(opacity=0.3).encode(
+            x='ds:T',
+            y='yhat_lower',
+            y2='yhat_upper'
+        )
+        st.altair_chart(forecast_chart, use_container_width=True)
 
-with tab2:
-    st.write(f"Predicted Data for {selected_topic}")
-    
-    # Prepare data for Prophet
-    df_prophet = df[df['Topic'] == selected_topic][['ds', 'DataValue']].rename(columns={'DataValue': 'y'}).dropna()
-    
-    # Initialize and fit the Prophet model
-    model = Prophet()
-    model.fit(df_prophet)
-    
-    # Create a future dataframe for predictions
-    future = model.make_future_dataframe(periods=1, freq='Y')
-    
-    # Make predictions
-    forecast = model.predict(future)
-    
-    # Extract relevant columns
-    forecast_df = forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']]
-    
-    # Create forecast chart
-    forecast_chart = alt.Chart(forecast_df).mark_line().encode(
-        x=alt.X('ds:T', title="Date"),
-        y=alt.Y('yhat', title="Percentage", axis=alt.Axis(format='%')),
-        tooltip=['ds:T', 'yhat', 'yhat_lower', 'yhat_upper']
-    ).properties(
-        title=f"Predicted {selected_topic}",
-        width=700,
-        height=400
-    )
-    
-    # Add confidence intervals
-    forecast_chart += alt.Chart(forecast_df).mark_area(opacity=0.3).encode(
-        x='ds:T',
-        y='yhat_lower',
-        y2='yhat_upper'
-    )
-    st.altair_chart(forecast_chart, use_container_width=True)
+
